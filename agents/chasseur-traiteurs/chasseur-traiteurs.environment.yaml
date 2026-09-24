@@ -1,0 +1,8 @@
+# Environnement cloud, réseau sans restriction : l'agent visite des sites de traiteurs
+# qu'on ne peut pas lister à l'avance.
+# Création : ant beta:environments create < chasseur-traiteurs.environment.yaml --transform id -r
+name: chasseur-traiteurs-env
+config:
+  type: cloud
+  networking:
+    type: unrestricted
