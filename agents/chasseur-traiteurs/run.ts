@@ -23,6 +23,8 @@ const DEPARTEMENTS = (process.env.DEPARTEMENTS ?? "69,01,38,42,71").split(",").m
 const MAX_ITERATIONS = Number(process.env.MAX_ITERATIONS ?? 3);
 const KICKOFF = process.env.KICKOFF ?? "outcome";
 const VERIF_SAMPLES = Number(process.env.VERIF_SAMPLES ?? 3);
+// Une url_preuve vers un de ces fichiers est refusée : toute preuve vient d'une page HTML.
+const MEDIA = /\.(pdf|jpe?g|png|gif|webp|svg|avif)(?:[?#]|$)/i;
 
 const RUBRIC = fs.readFileSync(path.join(import.meta.dirname, "rubric.md"), "utf8");
 const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Paris" }).format(new Date());
@@ -88,29 +90,41 @@ const final = await client.beta.sessions.retrieve(session.id);
 for (const ev of final.outcome_evaluations ?? []) console.log(`Outcome ${ev.outcome_id} : ${ev.result}`);
 
 // --- 4. Récupération des sorties --------------------------------------------------------
+// Les fichiers sont toujours téléchargés avant la contre-vérification : un échec (code 2)
+// laisse donc prospects_{date}.json, verification_preuves.json et controle_preuves.json
+// dans runs/.
 const outDir = path.join("runs", `${today}_${session.id}`);
 fs.mkdirSync(outDir, { recursive: true });
-let downloaded: string[] = [];
-for (let attempt = 0; attempt < 4 && downloaded.length === 0; attempt++) {
+const downloaded = new Map<string, string>(); // file_id -> chemin local
+const attendus = [/prospects_\d{4}-\d{2}-\d{2}\.json$/, /verification_preuves\.json$/];
+const complet = () => attendus.every((re) => [...downloaded.values()].some((p) => re.test(p)));
+for (let attempt = 0; attempt < 6 && !complet(); attempt++) {
   if (attempt > 0) await new Promise((r) => setTimeout(r, 2000)); // délai d'indexation
   for await (const f of client.beta.files.list({ scope_id: session.id, betas: ["managed-agents-2026-04-01"] })) {
+    if (downloaded.has(f.id)) continue;
     const resp = await client.beta.files.download(f.id);
     const dest = path.join(outDir, path.basename(f.filename));
     fs.writeFileSync(dest, Buffer.from(await resp.arrayBuffer()));
-    downloaded.push(dest);
+    downloaded.set(f.id, dest);
   }
 }
-console.log(`\nFichiers récupérés dans ${outDir} :\n  ${downloaded.join("\n  ") || "(aucun)"}`);
-
-const prospectsFile = downloaded.find((p) => /prospects_\d{4}-\d{2}-\d{2}\.json$/.test(p));
-if (!prospectsFile) {
-  console.error("ÉCHEC : fichier prospects_{date}.json introuvable dans les sorties.");
-  process.exit(1);
-}
+const fichiers = [...downloaded.values()];
+console.log(`\nFichiers récupérés dans ${outDir} :\n  ${fichiers.join("\n  ") || "(aucun)"}`);
 
 // --- 5. Contre-vérification indépendante des preuves -----------------------------------
-const ok = await verifierPreuves(JSON.parse(fs.readFileSync(prospectsFile, "utf8")));
-process.exit(ok ? 0 : 2);
+const rapportPath = path.join(outDir, "controle_preuves.json");
+const prospectsFile = fichiers.find((p) => attendus[0].test(p));
+if (!fichiers.some((p) => attendus[1].test(p))) {
+  console.warn("Attention : verification_preuves.json absent des sorties de l'agent.");
+}
+const controle = await controler(prospectsFile);
+fs.writeFileSync(
+  rapportPath,
+  JSON.stringify({ date_run: today, session_id: session.id, fichiers_recuperes: fichiers, ...controle }, null, 2),
+);
+console.log(`Rapport de contre-vérification : ${rapportPath}`);
+if (!controle.ok) for (const m of controle.motifs_echec) console.error(`ÉCHEC : ${m}`);
+process.exit(controle.ok ? 0 : prospectsFile ? 2 : 1);
 
 // ======================================================================================
 
@@ -194,53 +208,83 @@ function handle(event: Anthropic.Beta.Sessions.BetaManagedAgentsSessionEvent): b
 
 type Critere = { critere: string; points: number; preuve: string; url_preuve: string };
 type Prospect = { nom: string; criteres: Critere[] };
+type Resultat = Critere & {
+  nom: string;
+  statut: "ok" | "echec" | "injoignable";
+  motif: string | null;
+};
+type Controle = { ok: boolean; motifs_echec: string[]; echecs: Resultat[]; resultats: Resultat[] };
 
-const MEDIA = /\.(pdf|jpe?g|png|gif|webp|svg|avif)(?:[?#]|$)/i;
+async function controler(fichier: string | undefined): Promise<Controle> {
+  if (!fichier) return controleEchoue("fichier prospects_{date}.json introuvable dans les sorties");
+  let data: { prospects: Prospect[] };
+  try {
+    data = JSON.parse(fs.readFileSync(fichier, "utf8"));
+  } catch (err) {
+    return controleEchoue(`prospects JSON illisible : ${(err as Error).message}`);
+  }
+  return verifierPreuves(data);
+}
 
-async function verifierPreuves(data: { prospects: Prospect[] }): Promise<boolean> {
-  const candidats = data.prospects.flatMap((p) =>
+function controleEchoue(motif: string): Controle {
+  return { ok: false, motifs_echec: [motif], echecs: [], resultats: [] };
+}
+
+function versFichier(url: string): boolean {
+  try {
+    return MEDIA.test(new URL(url).pathname);
+  } catch {
+    return MEDIA.test(url);
+  }
+}
+
+async function verifierPreuves(data: { prospects: Prospect[] }): Promise<Controle> {
+  const candidats = (data.prospects ?? []).flatMap((p) =>
     (p.criteres ?? []).filter((c) => c.points > 0 && c.preuve && c.url_preuve).map((c) => ({ nom: p.nom, ...c })),
   );
+  const resultats: Resultat[] = [];
+  const noter = (c: (typeof candidats)[number], statut: Resultat["statut"], motif: string | null) => {
+    resultats.push({ ...c, statut, motif });
+    const icone = { ok: "✓", echec: "✗", injoignable: "?" }[statut];
+    console.log(`  ${icone} ${c.nom} — ${c.critere} : « ${c.preuve} » (${c.url_preuve})${motif ? ` — ${motif}` : ""}`);
+  };
 
   // Règle : toute preuve vient d'une page HTML — aucune url_preuve vers un PDF ou une image.
-  const versMedia = candidats.filter((c) => MEDIA.test(new URL(c.url_preuve, "https://x").pathname));
-  for (const c of versMedia) console.error(`  ✗ ${c.nom} — ${c.critere} : url_preuve vers un fichier (${c.url_preuve})`);
+  // Contrôlé sur toutes les preuves, pas seulement l'échantillon.
+  console.log(`\nContrôle des url_preuve (${candidats.length} preuves) :`);
+  const versMedia = candidats.filter((c) => versFichier(c.url_preuve));
+  for (const c of versMedia) noter(c, "echec", "url_preuve pointe vers un PDF ou une image, pas une page HTML");
 
-  shuffle(candidats);
-  console.log(`\nContre-vérification de ${VERIF_SAMPLES} preuves tirées au hasard (sur ${candidats.length}) :`);
-
+  const echantillon = candidats.filter((c) => !versMedia.includes(c));
+  shuffle(echantillon);
+  console.log(`Contre-vérification de ${VERIF_SAMPLES} preuves tirées au hasard (sur ${echantillon.length}) :`);
   let verifiees = 0;
-  let echecs = 0;
-  for (const c of candidats) {
+  for (const c of echantillon) {
     if (verifiees >= VERIF_SAMPLES) break;
-    if (versMedia.includes(c)) continue; // déjà compté en échec ci-dessus
     const page = await fetchPage(c.url_preuve);
     if (page === null) {
-      console.log(`  ? ${c.nom} — ${c.critere} : page injoignable (${c.url_preuve}), tirage suivant`);
+      noter(c, "injoignable", "page injoignable, tirage suivant");
       continue;
     }
     verifiees++;
-    const trouvee = page !== "media" && normaliser(page).includes(normaliser(c.preuve));
-    if (!trouvee) echecs++;
-    const detail = page === "media" ? " — l'URL renvoie un PDF/une image, pas une page HTML" : "";
-    console.log(`  ${trouvee ? "✓" : "✗"} ${c.nom} — ${c.critere} : « ${c.preuve} » (${c.url_preuve})${detail}`);
+    if (page === "media") noter(c, "echec", "l'URL renvoie un PDF ou une image, pas une page HTML");
+    else if (!normaliser(page).includes(normaliser(c.preuve))) noter(c, "echec", "citation introuvable sur la page");
+    else noter(c, "ok", null);
   }
 
-  let ok = true;
+  const echecs = resultats.filter((r) => r.statut === "echec");
+  const motifs_echec: string[] = [];
   if (versMedia.length > 0) {
-    console.error(`ÉCHEC : ${versMedia.length} preuve(s) pointent vers un PDF ou une image au lieu d'une page HTML.`);
-    ok = false;
+    motifs_echec.push(`${versMedia.length} preuve(s) pointent vers un PDF ou une image au lieu d'une page HTML`);
   }
+  const echecsEchantillon = echecs.length - versMedia.length;
+  if (echecsEchantillon > 0) motifs_echec.push(`${echecsEchantillon} preuve(s) de l'échantillon non retrouvée(s)`);
   if (verifiees < VERIF_SAMPLES) {
-    console.error(`ÉCHEC : seulement ${verifiees} preuve(s) vérifiable(s) sur ${VERIF_SAMPLES} demandées.`);
-    ok = false;
+    motifs_echec.push(`seulement ${verifiees} preuve(s) vérifiable(s) sur ${VERIF_SAMPLES} demandées`);
   }
-  if (echecs > 0) {
-    console.error(`ÉCHEC : ${echecs} citation(s) introuvable(s) sur la page indiquée.`);
-    ok = false;
-  }
+  const ok = motifs_echec.length === 0;
   if (ok) console.log("Preuves contre-vérifiées : OK.");
-  return ok;
+  return { ok, motifs_echec, echecs, resultats };
 }
 
 /**

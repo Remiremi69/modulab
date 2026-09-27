@@ -50,6 +50,12 @@ Le script affiche le lien Console pour suivre la session en direct. Les sorties 
 
 - `prospects_{date}.json` : prospects triés + exclus
 - `verification_preuves.json` : les 3 preuves ou plus retéléchargées par l'agent
+- `controle_preuves.json` : le rapport de la contre-vérification faite par `run.ts`
+  (`ok`, `motifs_echec`, `echecs` avec la preuve, l'URL et le motif de chaque échec, et
+  `resultats` pour toutes les preuves contrôlées)
+
+Ces fichiers sont téléchargés **avant** la contre-vérification. Ils restent donc dans `runs/`
+même quand le run sort en échec.
 
 ## Lancer depuis un PC Windows
 
