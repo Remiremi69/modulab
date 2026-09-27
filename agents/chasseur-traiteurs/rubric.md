@@ -9,6 +9,9 @@ un seul critère non satisfait = révision.
    `points` de ses `criteres`. Aucun critère ne dépasse son barème (25/20/20/15/10/10).
 3. Chaque critère à points > 0 a une `preuve` non vide et une `url_preuve` située sur le
    domaine du prospect ou sur une source nommée (annuaire mariage, API recherche-entreprises).
+   Aucune `url_preuve` ne pointe vers un PDF ou une image (`.pdf`, `.jpg`, `.png`, etc.) :
+   pour « menus en PDF / en image » et « tarifs sur demande », la preuve est le texte du lien
+   ou le nom du fichier tel qu'il apparaît sur la page HTML, et `url_preuve` est cette page.
 4. Aucun prospect hors des départements demandés dans le message de lancement, et aucun
    SIREN présent dans `prospects_vus.json` au démarrage du run n'apparaît dans la sortie.
 5. Le nombre total analysé (prospects + exclus) ne dépasse pas le maximum demandé dans le

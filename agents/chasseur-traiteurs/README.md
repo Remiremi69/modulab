@@ -51,6 +51,63 @@ Le script affiche le lien Console pour suivre la session en direct. Les sorties 
 - `prospects_{date}.json` : prospects triés + exclus
 - `verification_preuves.json` : les 3 preuves ou plus retéléchargées par l'agent
 
+## Lancer depuis un PC Windows
+
+### Prérequis
+
+1. **Node.js 20.11 ou plus récent** (LTS) :
+   `winget install OpenJS.NodeJS.LTS`, puis rouvrez le terminal et vérifiez avec `node -v`.
+2. **Git** (pour cloner le dépôt) : `winget install Git.Git`.
+3. **PowerShell 7** (recommandé : il envoie l'UTF-8 correctement aux commandes, donc les
+   accents du prompt restent intacts) : `winget install Microsoft.PowerShell`, puis ouvrez
+   « PowerShell 7 » (`pwsh`), idéalement dans Windows Terminal.
+4. **CLI `ant`** : téléchargez l'archive Windows (`windows_amd64`, ou `windows_arm64` sur un
+   PC ARM) depuis https://github.com/anthropics/anthropic-cli/releases, extrayez `ant.exe`
+   dans un dossier (ex. `C:\Tools\ant`) et ajoutez ce dossier au `PATH` de votre compte.
+   Vérifiez avec `ant --version`.
+5. **Authentification** : `ant auth login` (ouvre le navigateur ; le profil est enregistré
+   dans `%APPDATA%\Anthropic` et lu automatiquement par le SDK). Vérifiez avec
+   `ant auth status`. Ne définissez pas en plus `ANTHROPIC_API_KEY` : elle masquerait le profil.
+6. **Réseau** : `run.ts` télécharge lui-même 3 pages de preuve depuis votre PC. Derrière un
+   proxy d'entreprise, ces téléchargements peuvent échouer. Le script tente alors d'autres
+   tirages et échoue s'il n'en vérifie pas assez.
+
+### Commandes (PowerShell 7)
+
+PowerShell ne gère pas la redirection `<`, on passe donc le YAML par un pipe :
+
+```powershell
+git clone https://github.com/Remiremi69/modulab.git; cd modulab
+npm install
+cd agents\chasseur-traiteurs
+
+$OutputEncoding = [System.Text.UTF8Encoding]::new()   # accents du prompt en UTF-8
+$env:AGENT_ID = Get-Content -Raw -Encoding utf8 chasseur-traiteurs.agent.yaml | ant beta:agents create --transform id -r
+$env:ENV_ID   = Get-Content -Raw -Encoding utf8 chasseur-traiteurs.environment.yaml | ant beta:environments create --transform id -r
+npx tsx setup-memory.ts                               # affiche l'ID memstore_...
+$env:MEMORY_STORE_ID = "memstore_..."                 # collez l'ID affiché
+"AGENT_ID=$env:AGENT_ID ENV_ID=$env:ENV_ID"           # notez ces IDs
+
+cd ..\..
+npx tsx agents/chasseur-traiteurs/run.ts
+```
+
+Pour les runs suivants, dans un nouveau terminal, redéfinissez les trois variables, puis
+changez les paramètres de la même façon :
+
+```powershell
+$env:AGENT_ID = "agent_..."; $env:ENV_ID = "env_..."; $env:MEMORY_STORE_ID = "memstore_..."
+$env:MAX_PROSPECTS = "30"; npx tsx agents/chasseur-traiteurs/run.ts
+Remove-Item Env:MAX_PROSPECTS                         # revenir à la valeur par défaut (15)
+```
+
+Pour les garder d'une session à l'autre :
+`[Environment]::SetEnvironmentVariable("AGENT_ID", "agent_...", "User")` (idem pour
+`ENV_ID` et `MEMORY_STORE_ID`), puis rouvrez le terminal.
+
+Le code de sortie du run se lit avec `$LASTEXITCODE` : `0` = OK, `1` = pas de fichier de
+sortie, `2` = contre-vérification des preuves en échec.
+
 ## Comment la qualité est contrôlée
 
 1. **Outcome** : la session démarre par `user.define_outcome` avec `rubric.md`. Un évaluateur
@@ -63,7 +120,10 @@ Le script affiche le lien Console pour suivre la session en direct. Les sorties 
    - `run.ts` fait ensuite **sa propre** vérification indépendante. Il tire 3 preuves au hasard,
      télécharge les pages depuis votre machine et cherche la citation, en ignorant casse,
      accents, ponctuation et espaces. Code de sortie `2` si une citation est introuvable.
-     Les pages non lisibles automatiquement (PDF, erreurs) sont remplacées par un autre tirage.
+     Les pages injoignables sont remplacées par un autre tirage.
+   - Toute preuve doit venir d'une page HTML. Pour « menus en PDF » et « tarifs sur demande »,
+     la preuve est le texte du lien ou le nom du fichier sur la page, jamais le contenu du PDF.
+     `run.ts` fait échouer le run dès qu'une `url_preuve` pointe vers un PDF ou une image.
 3. **Repli** : si `define_outcome` est refusé (400/403/404), le script relance avec un simple
    `user.message` contenant la grille comme checklist d'auto-vérification. Dans ce cas, aucun
    évaluateur séparé n'intervient, mais la contre-vérification de `run.ts` s'applique toujours.

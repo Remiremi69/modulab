@@ -78,6 +78,14 @@ system: |
   - Chaque point attribué exige une preuve : une citation courte copiée mot pour mot du site
     ou de la source, avec l'URL exacte de la page où elle figure. Sans preuve, 0 point pour
     ce critère.
+  - Toute preuve provient d'une page HTML, et `url_preuve` est l'URL de cette page HTML.
+    Aucune preuve ne vient de l'intérieur d'un PDF ou d'une image, et `url_preuve` ne pointe
+    jamais vers un fichier PDF ou image.
+  - « Menus en PDF, en image » : la preuve est le texte du lien (ou, à défaut, le nom du
+    fichier) tel qu'il apparaît sur la page HTML qui renvoie vers le PDF ou l'image ;
+    `url_preuve` est cette page HTML, pas l'URL du PDF.
+  - « Tarifs sur demande / sur devis » : même règle, la mention doit être citée depuis une
+    page HTML. Si elle n'apparaît qu'à l'intérieur d'un PDF, elle ne compte pas comme preuve.
   - N'invente jamais un email, un nom, un effectif ou une information. Si inconnu : `null`.
   - Emails : uniquement les adresses professionnelles publiées sur le site.
   - Si tu hésites entre deux notes, prends la plus basse.

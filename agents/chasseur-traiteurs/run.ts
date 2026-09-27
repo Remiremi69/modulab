@@ -7,7 +7,8 @@
 //   DEPARTEMENTS    (défaut "69,01,38,42,71")
 //   MAX_ITERATIONS  (défaut 3 — cycles évaluation/révision de l'outcome, max 20)
 //   KICKOFF         ("outcome" par défaut, "message" pour forcer le repli)
-//   VERIF_SAMPLES   (défaut 3 — preuves contre-vérifiées côté machine)
+//   VERIF_SAMPLES   (défaut 3 — preuves contre-vérifiées côté machine ; en plus, toute
+//                    url_preuve vers un PDF ou une image fait échouer le run)
 //
 // Usage : npx tsx agents/chasseur-traiteurs/run.ts
 import Anthropic from "@anthropic-ai/sdk";
@@ -194,10 +195,17 @@ function handle(event: Anthropic.Beta.Sessions.BetaManagedAgentsSessionEvent): b
 type Critere = { critere: string; points: number; preuve: string; url_preuve: string };
 type Prospect = { nom: string; criteres: Critere[] };
 
+const MEDIA = /\.(pdf|jpe?g|png|gif|webp|svg|avif)(?:[?#]|$)/i;
+
 async function verifierPreuves(data: { prospects: Prospect[] }): Promise<boolean> {
   const candidats = data.prospects.flatMap((p) =>
     (p.criteres ?? []).filter((c) => c.points > 0 && c.preuve && c.url_preuve).map((c) => ({ nom: p.nom, ...c })),
   );
+
+  // Règle : toute preuve vient d'une page HTML — aucune url_preuve vers un PDF ou une image.
+  const versMedia = candidats.filter((c) => MEDIA.test(new URL(c.url_preuve, "https://x").pathname));
+  for (const c of versMedia) console.error(`  ✗ ${c.nom} — ${c.critere} : url_preuve vers un fichier (${c.url_preuve})`);
+
   shuffle(candidats);
   console.log(`\nContre-vérification de ${VERIF_SAMPLES} preuves tirées au hasard (sur ${candidats.length}) :`);
 
@@ -205,37 +213,61 @@ async function verifierPreuves(data: { prospects: Prospect[] }): Promise<boolean
   let echecs = 0;
   for (const c of candidats) {
     if (verifiees >= VERIF_SAMPLES) break;
-    const page = await fetchTexte(c.url_preuve);
+    if (versMedia.includes(c)) continue; // déjà compté en échec ci-dessus
+    const page = await fetchPage(c.url_preuve);
     if (page === null) {
-      console.log(`  ? ${c.nom} — ${c.critere} : page non lisible automatiquement (${c.url_preuve}), tirage suivant`);
+      console.log(`  ? ${c.nom} — ${c.critere} : page injoignable (${c.url_preuve}), tirage suivant`);
       continue;
     }
     verifiees++;
-    const trouvee = normaliser(page).includes(normaliser(c.preuve));
+    const trouvee = page !== "media" && normaliser(page).includes(normaliser(c.preuve));
     if (!trouvee) echecs++;
-    console.log(`  ${trouvee ? "✓" : "✗"} ${c.nom} — ${c.critere} : « ${c.preuve} » (${c.url_preuve})`);
+    const detail = page === "media" ? " — l'URL renvoie un PDF/une image, pas une page HTML" : "";
+    console.log(`  ${trouvee ? "✓" : "✗"} ${c.nom} — ${c.critere} : « ${c.preuve} » (${c.url_preuve})${detail}`);
   }
 
+  let ok = true;
+  if (versMedia.length > 0) {
+    console.error(`ÉCHEC : ${versMedia.length} preuve(s) pointent vers un PDF ou une image au lieu d'une page HTML.`);
+    ok = false;
+  }
   if (verifiees < VERIF_SAMPLES) {
     console.error(`ÉCHEC : seulement ${verifiees} preuve(s) vérifiable(s) sur ${VERIF_SAMPLES} demandées.`);
-    return false;
+    ok = false;
   }
   if (echecs > 0) {
     console.error(`ÉCHEC : ${echecs} citation(s) introuvable(s) sur la page indiquée.`);
-    return false;
+    ok = false;
   }
-  console.log("Preuves contre-vérifiées : OK.");
-  return true;
+  if (ok) console.log("Preuves contre-vérifiées : OK.");
+  return ok;
 }
 
-async function fetchTexte(url: string): Promise<string | null> {
+/**
+ * Texte visible de la page HTML, suivi des noms de fichiers cités dans ses liens (href/src),
+ * pour qu'une preuve « nom du fichier PDF » soit retrouvable. "media" si l'URL renvoie un
+ * PDF/une image ; null si la page est injoignable.
+ */
+async function fetchPage(url: string): Promise<string | "media" | null> {
   try {
     const resp = await fetch(url, {
       signal: AbortSignal.timeout(20_000),
       headers: { "user-agent": "Mozilla/5.0 (verification-preuves Limen)" },
     });
-    if (!resp.ok || !(resp.headers.get("content-type") ?? "").includes("html")) return null;
-    return (await resp.text())
+    if (!resp.ok) return null;
+    const type = resp.headers.get("content-type") ?? "";
+    if (/pdf|image\//i.test(type)) return "media";
+    if (!type.includes("html")) return null;
+    const html = await resp.text();
+    const fichiers = [...html.matchAll(/\b(?:href|src)\s*=\s*["']([^"']+)["']/gi)].map((m) => {
+      const nom = m[1].split(/[?#]/)[0].split("/").pop() ?? "";
+      try {
+        return decodeURIComponent(nom);
+      } catch {
+        return nom;
+      }
+    });
+    const texte = html
       .replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, " ")
       .replace(/<[^>]+>/g, " ")
       .replace(/&nbsp;/g, " ")
@@ -244,6 +276,7 @@ async function fetchTexte(url: string): Promise<string | null> {
       .replace(/&quot;|&laquo;|&raquo;/g, '"')
       .replace(/&euro;/g, "€")
       .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+    return [texte, ...fichiers].join(" | ");
   } catch {
     return null;
   }
