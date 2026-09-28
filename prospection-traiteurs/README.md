@@ -8,7 +8,7 @@ mécanique**, et Claude n'intervient qu'en appoint :
 | Liste des petits traiteurs du département (API Recherche d'entreprises, 0 à 19 salariés) | code | gratuit |
 | Pré-filtre : siège dans le département, activité 56.21Z, 3 établissements ouverts au plus | code | gratuit |
 | Site officiel déduit du nom (`nom-du-traiteur.fr/.com`), vérifié : nom, métier et zone (commune, code postal du département, Lyon/Rhône) | code | gratuit |
-| Site introuvable par déduction : recherche web | Claude Haiku 4.5 | ~0,01 $ chacune, plafonné |
+| Site introuvable par déduction : recherche web | Claude Haiku 4.5 | ~0,02 $ chacune, plafonné |
 | Lecture de l'accueil + pages contact / menus / mariage | code | gratuit |
 | Notation sur 100 et preuves (extraits **copiés tels quels** des pages ou données INSEE) | code | gratuit |
 | Angle d'approche des prospects ≥ 60 | modèle de phrase fondé sur la meilleure preuve | gratuit |
