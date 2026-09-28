@@ -14,6 +14,7 @@ export type Entreprise = {
   dateCreation: string | null;
   tranche: string | null;
   nbEtablissementsOuverts: number;
+  departement: string;
 };
 
 export type Analyse = {
@@ -176,7 +177,15 @@ export function siteCorrespond(page: Page, e: Entreprise): boolean {
   const mots = [...new Set(e.noms.flatMap(motsDistinctifs))];
   const nomPresent = mots.length > 0 ? mots.some((m) => t.includes(m)) : false;
   const metier = /\b(traiteur|traiteurs|reception|receptions|mariage|buffet|cocktail)\b/.test(t);
-  return nomPresent && metier;
+  // Bonne zone : la commune du siège, un code postal du département, Lyon ou le Rhône.
+  // Évite les homonymes (ex. un restaurant du même nom à Aix-en-Provence).
+  const commune = normaliser(e.commune.replace(/\b\d+E? ARRONDISSEMENT\b/i, ""));
+  const dep = e.departement;
+  const zone =
+    (commune.length > 2 && t.includes(commune)) ||
+    new RegExp(`\\b${dep}\\d{3}\\b`).test(page.texte) ||
+    (dep === "69" && /\b(lyon|lyonnais|rhone|beaujolais|villeurbanne)\b/.test(t));
+  return nomPresent && metier && zone;
 }
 
 // --- Choix des pages à lire ------------------------------------------------------------
@@ -217,9 +226,9 @@ function decodeURIComponentSur(s: string): string {
 const OUTIL_DEVIS = /configurateur|simulateur|calculez votre (devis|budget|prix)|composez votre menu|devis instantan|estimation en ligne|obtenez votre prix/i;
 const SUR_DEVIS = /sur devis|sur demande|devis gratuit|nous consulter|tarifs? personnalis/i;
 const FICHIER_MENU = /menu|carte|tarif|formule|mariage|buffet|cocktail|brochure|plaquette/i;
-const APPEL_CONTACT = /devis|contactez|contact|demande|renseignement|écrivez|ecrivez/i;
+const APPEL_CONTACT = /devis|contactez|nous contacter|contact|écrivez-nous|ecrivez-nous/i;
 const MARIAGE = /mariage|anniversaire|bapt[eê]me|communion|fian[cç]ailles|[ée]v[ée]nements? (familia|priv)/i;
-const ANNUAIRES = /mariages\.net|zankyou|weddingwire|mariages\.fr|1001mariages|tripadvisor|avis-verifies|g\.page|google\.[a-z.]+\/maps|trustpilot/i;
+const ANNUAIRES = /mariages\.net|zankyou|weddingwire|mariages\.fr|1001mariages|avis-verifies|trustpilot/i;
 const RECRUTEMENT = /recrut|nous rejoindre|offres? d'emploi|on embauche/i;
 
 const TRANCHES: Record<string, string> = {
@@ -266,10 +275,21 @@ export function analyser(e: Entreprise, pages: Page[], aujourdhui: Date): Analys
   ajouter("Menus en PDF/image ou tarifs sur devis", 25, preuve1?.[0] ?? null, preuve1?.[1] ?? "");
 
   // 2. Pas d'outil de devis en ligne, simple formulaire / contact (20)
-  const pageContact = pages.find((p) => /contact|devis/i.test(p.url)) ?? pages[0];
+  // Preuve prise sur la page contact si elle existe ; sinon, seulement une formule explicite
+  // (« devis », « contactez-nous »…) sur une autre page.
+  const pageContact = pages.find((p) => /contact|devis/i.test(new URL(p.url).pathname));
   const aUnMoyenDeContact = pages.some((p) => /<form\b|mailto:|tel:/i.test(p.html));
-  const x2 = aUnMoyenDeContact ? extrait(pageContact.texte, APPEL_CONTACT) : null;
-  ajouter("Pas d'outil de devis en ligne, simple formulaire", 20, x2, pageContact.url);
+  let preuve2: [string, string] | null = null;
+  if (aUnMoyenDeContact) {
+    for (const p of pageContact ? [pageContact] : pages) {
+      const x = extrait(p.texte, pageContact ? APPEL_CONTACT : /devis|contactez|nous contacter/i);
+      if (x) {
+        preuve2 = [x, p.url];
+        break;
+      }
+    }
+  }
+  ajouter("Pas d'outil de devis en ligne, simple formulaire", 20, preuve2?.[0] ?? null, preuve2?.[1] ?? "");
 
   // 3. Mariage / événements privés visibles (20)
   let preuve3: [string, string] | null = null;
@@ -328,24 +348,37 @@ export function analyser(e: Entreprise, pages: Page[], aujourdhui: Date): Analys
   if (/food ?truck/.test(tout)) a_verifier.push("Mentionne un food truck : activité principale ?");
   if (/plateaux? repas/.test(tout) && !preuve3) a_verifier.push("Plateaux-repas sans événements privés visibles");
   if ((tout.match(/\brestaurant\b/g) ?? []).length >= 5) a_verifier.push("Nombreuses mentions « restaurant » : traiteur en appoint ?");
-  if (/devis en ligne/.test(tout)) a_verifier.push("Mentionne « devis en ligne » : simple formulaire ou vrai outil ?");
+  const devisEnLigne = pages.map((p) => extrait(p.texte, /devis\b[^.!?]{0,30}\ben ligne|\ben ligne\b[^.!?]{0,30}\bdevis/i)).find(Boolean);
+  if (devisEnLigne) a_verifier.push(`Mentionne un devis en ligne (« ${devisEnLigne} ») : simple formulaire ou vrai outil ?`);
 
   return { criteres, exclusion: null, a_verifier };
 }
 
 // --- Enrichissement pour la démo -------------------------------------------------------
 
+// Palettes par défaut de WordPress, Divi, Elementor et Google Maps : pas des couleurs de marque.
+const COULEURS_PAR_DEFAUT = new Set([
+  "#00d084", "#0693e3", "#9b51e0", "#cf2e2e", "#ff6900", "#fcb900", "#7bdcb5", "#8ed1fc", "#abb8c3", "#f78da7",
+  "#2ea3f2", "#e6b2d4", "#006799", "#6ec1e4", "#54595f", "#7a7a7a", "#61ce70", "#4285f4", "#34a853",
+  "#fbbc04", "#ea4335", "#1a73e8", "#0073aa", "#00a0d2", "#2271b1", "#135e96",
+]);
+
+function estGris(c: string): boolean {
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(c.slice(1 + i, 3 + i), 16));
+  return Math.max(r, g, b) - Math.min(r, g, b) < 24;
+}
+
 export function couleurs(page: Page): string[] {
-  const theme = /<meta[^>]+name=["']theme-color["'][^>]+content=["'](#[0-9a-f]{6})/i.exec(page.html)?.[1];
+  const theme = /<meta[^>]+name=["']theme-color["'][^>]+content=["'](#[0-9a-f]{6})/i.exec(page.html)?.[1]?.toLowerCase();
   const compte = new Map<string, number>();
   for (const m of page.html.matchAll(/#([0-9a-f]{6})\b/gi)) {
     const c = `#${m[1].toLowerCase()}`;
-    const [r, g, b] = [0, 2, 4].map((i) => parseInt(c.slice(1 + i, 3 + i), 16));
-    if (Math.max(r, g, b) - Math.min(r, g, b) < 24) continue; // gris, blanc, noir
+    if (estGris(c) || COULEURS_PAR_DEFAUT.has(c)) continue;
     compte.set(c, (compte.get(c) ?? 0) + 1);
   }
   const top = [...compte.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
-  return [...new Set([theme?.toLowerCase(), ...top].filter((c): c is string => !!c))].slice(0, 3);
+  const themeOk = theme && !estGris(theme) && !COULEURS_PAR_DEFAUT.has(theme) ? theme : undefined;
+  return [...new Set([themeOk, ...top].filter((c): c is string => !!c))].slice(0, 3);
 }
 
 export function logo(page: Page): string | null {

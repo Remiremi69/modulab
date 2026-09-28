@@ -7,11 +7,11 @@ mécanique**, et Claude n'intervient qu'en appoint :
 |---|---|---|
 | Liste des petits traiteurs du département (API Recherche d'entreprises, 0 à 19 salariés) | code | gratuit |
 | Pré-filtre : siège dans le département, activité 56.21Z, 3 établissements ouverts au plus | code | gratuit |
-| Site officiel déduit du nom (`nom-du-traiteur.fr/.com`, vérifié sur la page) | code | gratuit |
+| Site officiel déduit du nom (`nom-du-traiteur.fr/.com`), vérifié : nom, métier et zone (commune, code postal du département, Lyon/Rhône) | code | gratuit |
 | Site introuvable par déduction : recherche web | Claude Haiku 4.5 | ~0,01 $ chacune, plafonné |
 | Lecture de l'accueil + pages contact / menus / mariage | code | gratuit |
 | Notation sur 100 et preuves (extraits **copiés tels quels** des pages ou données INSEE) | code | gratuit |
-| Angle d'approche des prospects ≥ 60 | Claude Haiku 4.5 (modèle de phrase sans IA) | < 0,01 $ chacun |
+| Angle d'approche des prospects ≥ 60 | modèle de phrase fondé sur la meilleure preuve | gratuit |
 
 Les preuves ne peuvent pas être inventées : ce sont des extraits recopiés des pages par le
 programme. L'IA ne note rien.
@@ -34,7 +34,7 @@ Ouvrez `Lancer-prospection.cmd` avec le Bloc-notes et retirez `rem ` devant la l
 | Réglage | Défaut | Effet |
 |---|---|---|
 | `MAX_ANALYSES` | 40 | entreprises analysées par run |
-| `RECHERCHES_WEB` | 10 | recherches web Claude pour trouver un site (≈ 0,01 $ chacune) |
+| `RECHERCHES_WEB` | 10 | recherches web Claude pour trouver un site (≈ 0,02 $ chacune, résultats compris) |
 | `SANS_IA=1` | – | aucun appel à Claude, coût 0 |
 | `DEPARTEMENT` | 69 | département ciblé |
 
@@ -52,5 +52,7 @@ ajoutée, elle sera réessayée. Pour tout réanalyser, supprimez ce fichier.
   Les tranches ambiguës (1-2, 10-19, non renseignée) valent 0 et sont signalées dans « à vérifier ».
 - Les sites entièrement construits en JavaScript (certains Wix) exposent peu de texte : score
   sous-estimé possible.
+- Couleurs : les palettes par défaut (WordPress, Divi, Google Maps) sont ignorées ; à confirmer
+  à l'œil avant une démo.
 - Restaurant d'abord, food truck, plateaux-repas : signalés dans « à vérifier », pas exclus
   automatiquement. La relecture humaine reste nécessaire avant tout contact.

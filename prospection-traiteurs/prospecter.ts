@@ -1,7 +1,7 @@
 // Prospection des traiteurs — version économique.
 // Le code fait tout le travail mécanique (API gouv, sites, preuves, scores).
-// Claude Haiku n'intervient que pour : trouver un site introuvable par déduction du nom
-// (recherche web, plafonnée) et rédiger l'angle d'approche des prospects ≥ 60.
+// Claude Haiku n'intervient que pour trouver un site introuvable par déduction du nom
+// (recherche web, plafonnée). Les angles d'approche sont des modèles de phrase, sans IA.
 //
 // Lancement : double-clic sur Lancer-prospection.cmd, ou
 //   npx.cmd tsx prospection-traiteurs/prospecter.ts
@@ -10,7 +10,7 @@
 //   DEPARTEMENT     69 par défaut
 //   MAX_ANALYSES    nombre maximum d'entreprises analysées par run (défaut 40)
 //   RECHERCHES_WEB  recherches web Claude autorisées pour trouver un site (défaut 10, ~0,01 $ chacune)
-//   SANS_IA=1       aucun appel à Claude (coût 0 ; sites non devinés = ignorés, angles modèles)
+//   SANS_IA=1       aucun appel à Claude (coût 0 ; sites non devinés = réessayés au run suivant)
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
@@ -95,6 +95,7 @@ async function listerEntreprises(): Promise<{ retenues: Entreprise[]; total: num
         dateCreation: x.date_creation ?? null,
         tranche: x.tranche_effectif_salarie ?? null,
         nbEtablissementsOuverts: x.nombre_etablissements_ouverts ?? 0,
+        departement: DEPARTEMENT,
       });
     }
     if (page * 25 >= total || r.resultats.length === 0) break;
@@ -145,28 +146,6 @@ async function rechercheWeb(e: Entreprise): Promise<string | null> {
     const url = /https?:\/\/[^\s)>\]"']+/.exec(texte)?.[0];
     if (!url || /facebook|instagram|pagesjaunes|mariages\.net|linkedin|societe\.com|annuaire/i.test(url)) return null;
     return url;
-  } catch (err) {
-    return erreurIa(err);
-  }
-}
-
-// --- 3. Angle d'approche (IA) -----------------------------------------------------------------
-
-async function angleIa(nom: string, criteres: Critere[]): Promise<string | null> {
-  const preuves = criteres.filter((c) => c.points > 0).map((c) => `- ${c.critere} : « ${c.preuve} »`).join("\n");
-  try {
-    const rep = await client.messages.create({
-      model: MODELE,
-      max_tokens: 200,
-      system:
-        "Tu rédiges une phrase d'accroche de prospection pour le Composeur, un configurateur en ligne où " +
-        "le client compose son menu et obtient un devis. Une seule phrase, en français, au vouvoiement, " +
-        "fondée uniquement sur les preuves fournies. N'invente aucun fait.",
-      messages: [{ role: "user", content: `Traiteur : ${nom}\nPreuves :\n${preuves}\n\nÉcris la phrase.` }],
-    });
-    compter(rep.usage);
-    const t = rep.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join(" ").trim();
-    return t || null;
   } catch (err) {
     return erreurIa(err);
   }
@@ -244,9 +223,7 @@ await parLots(aAnalyser, 5, async (e) => {
 
 console.log("\n3/3 Angles d'approche (prospects ≥ 60)…");
 prospects.sort((a, b) => b.score - a.score);
-for (const p of prospects.filter((p) => p.score >= 60)) {
-  p.angle = (iaActive ? await angleIa(p.nom, p.criteres) : null) ?? angleModele(p.criteres);
-}
+for (const p of prospects.filter((p) => p.score >= 60)) p.angle = angleModele(p.criteres);
 
 // --- 5. Sorties -----------------------------------------------------------------------------------
 
